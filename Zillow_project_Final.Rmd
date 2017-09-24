@@ -771,14 +771,7 @@ sprintf("Random Forest MSE: %f", MSE.RF)
 MSE.Boosting <- mean((prediction - test.data$logerror)^2)
 sprintf("Boosting MSE: %f", MSE.Boosting)
 ```
-As to the results, we choose the random forest model since it has the minimum MSE among these three tree-based models.
 
-Mistakes to notice: 1. deal with missing values before split into train and test dataset, to make sure they have same dimention. 
-2.For character variables, we should impute new levels in test dataset as NAs. 
-3. rpart() can deal with missing values automatically, but randomForest() needs us to deal with NAs beforen running the model. 
-4. To use randomForest, convert character features into factors. 
-5. In xgboost, we should set labels (response variable), and also convert features from data frame to matrix. 
-6. Extremely careful of NAs! After 2, the complete test dataset will probably have NAs again, remember to deal with that. If not, in xgboost, test.matrix and test.data will have different dimensions.
 
 
 
