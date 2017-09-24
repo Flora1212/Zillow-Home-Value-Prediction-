@@ -2,6 +2,7 @@
 
 The goal of the project is to predict the log-error between Zillow's Zestimate and the actual sale price, given all the features of a home.
 
-●	Fit multiple linear regression models with regularization to control for multicollinearity, and tree-based models (bagging, random forest, boosting) to predict the log-error between Zillow’s estimate of home values and actual sale prices
-●	Visualized raw data and predicted outputs using ggplot2, tabplot, corrplot, lattice, leaflet libraries
+1. Data exploration and visualization, feature Engineering, feature selection 
+2. Fit multiple linear regression models with regularization to control for multicollinearity
+3. Fit tree-based models including bagging, random forest, boosting AND conduct grid search to find best parameters
 
