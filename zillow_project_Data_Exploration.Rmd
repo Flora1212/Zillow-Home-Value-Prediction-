@@ -1,0 +1,265 @@
+
+#  Zillow project, Data Exploration
+
+## Step one - Collecting data 
+This dataset is collected from kaggle zillow challenge.
+
+## Step two - Exploring and preparing the data
+## Import data in Rstudio
+```{r}
+train<-read.csv('train_2016_v2.csv', stringsAsFactors = FALSE)
+property <- read.csv('properties_2016.csv', stringsAsFactors = FALSE)
+```
+
+## Combine train and property dataset
+```{r}
+length(unique(train$parcelid))
+length(unique(property$parcelid))
+property <- subset(property, parcelid %in% train$parcelid)
+##  select all the rows in property that are accordingly to rows in train$parcelid
+train <- merge(train, property, by = 'parcelid', all.x = T)
+## all.x = T means left join
+write.csv(train, 'train_property.csv')
+
+```
+
+## Check the data types
+```{r}
+library(ggplot2)
+types <- sapply(train, class)
+df.types <- data.frame(table(types),
+                       row.names = NULL) ##  convert to data.frame
+ggplot(data=df.types, aes(x=types, y=Freq/sum(Freq))) + geom_bar(stat = "identity", width=0.2)
+```
+
+
+## Check the missing values
+
+```{r}
+num.NA <- sort(colSums(sapply(train, is.na)))
+num.NA
+##  visualize
+library(ggplot2)
+dfnum.NA <- data.frame(ind = c(1:length(num.NA)),
+                       percentage = num.NA/nrow(train),
+                       per80 = num.NA/nrow(train)>=0.2,
+                       name = names(num.NA),
+                       row.names = NULL) ##  convert to data.frame
+ggplot(data = dfnum.NA, aes(x=ind, y=percentage)) + 
+  geom_bar(aes(fill=per80), stat="identity") + 
+  scale_x_discrete(name ="column names", 
+                   limits=dfnum.NA$name)+
+  theme(axis.text.x = element_text(angle=90, hjust=1, vjust=.5),
+        legend.position = "none") +
+  geom_hline(yintercept = 0.2) + 
+  annotate("text", 5, 0.21, label="20 percent", size = 5) + 
+  annotate("text", 4, 0.35, label="drop", color="## 00BFC4",size=5) + 
+  annotate("text", 4, 0.05, label="keep", color="## F8766D",size=5) + 
+  ggtitle("percentage of missing")
+```
+
+## Dealing with the missing data
+We drop the variables with less than 20% missing values. Now we have 31 variables left.
+```{r}
+remain.col <- names(num.NA)[which(num.NA <= 0.2 * dim(train)[1])] ##  trainT = train
+train <- train[, remain.col]
+str(train)
+```
+
+## Check the response variable logerror
+```{r}
+summary(train$logerror)
+plot(density(train$logerror))
+```
+We can see that logerror is very centered to 0, indicating Zestimate works quite well.
+
+
+## Correlation - numeric variables
+To select the variables, we first calculate the correlation between numeric variables and response variable logerror.
+```{r}
+length(unique(train$propertycountylandusecode))
+length(unique(train$propertylandusetypeid))
+length(unique(train$propertyzoningdesc))
+typeof(train$propertyzoningdesc)
+length(unique(train$assessmentyear))
+summary(unique(train$taxdelinquencyflag))
+typeof(unique(train$latitude))
+length(unique(train$taxvaluedollarcnt))
+
+
+library(corrplot)
+correlations <- cor(train[, c('logerror', 'bathroomcnt', 'bedroomcnt', 'latitude','longitude','roomcnt',
+                              'taxvaluedollarcnt','landtaxvaluedollarcnt', 
+                              'taxamount', 'structuretaxvaluedollarcnt','calculatedfinishedsquarefeet',
+                              'calculatedbathnbr', 'fullbathcnt', 'finishedsquarefeet12',
+                              'lotsizesquarefeet')],use = "pairwise.complete.obs")
+correlations
+corrplot(correlations, method = "square", tl.cex = 1, type = 'upper')
+```
+
+Here, use = "pairwise.complete.obs" applies where trying to build a correlation matrix (i.e. correlations between more than two variables) and instead of dropping all cases with any missing data, it only drops cases from each pairwise correlation calculation.
+
+From the correlation results, we can see that the correlation between independent variables and response variable logerror are generally low. But we can still choose some with relatively higher correlation: **bathroomcnt,bedroomcnt,structuretaxvaluedollarcnt,calculatedfinishedsquarefeet,calculatedbathnbr,fullbathcnt,
+finishedsquarefeet12.** finishedsquarefeet12 has the strongest positive correlation with logerror, while taxamount has the strongest negative correlation with logerror.
+
+Then, we use tabplot to further check each variable.
+
+##  Tabplot - numeric
+## date variables: year-built
+```{r}
+barplot(table(train$yearbuilt))
+err.month_yearbuilt <- by(train, train$yearbuilt, function(x) {
+  return(mean(x$logerror))})
+plot(names(err.month_yearbuilt), err.month_yearbuilt, type = 'l', xlab='year_built',ylab='mean_logerror')
+```
+The graph shows that the predictions for the early-year built houses are less accurate with higher mean_logerror ,especially the houses built before 1900. After 1940, the predictions become much better. However, recently underestimates are increasing.
+
+## number variables
+```{r}
+library(tabplot)
+tableplot(train, select = c('logerror', 'bathroomcnt', 'bedroomcnt', 'roomcnt',
+                              'calculatedbathnbr', 'fullbathcnt'))
+plot(density(train$roomcnt))
+
+```
+From the graph we can see that when absolute logerror is higher,roomcnt tend to be lower. 
+
+## area variables
+```{r}
+tableplot(train, select = c('logerror', 
+                             'calculatedfinishedsquarefeet',
+                             'finishedsquarefeet12','lotsizesquarefeet'))
+```
+We can see that underestimate zestimate tends to go with higher calculatedfinishedsquarefeet and finishedsquarefeet12, overestimate zestimate tends to go with lower calculatedfinishedsquarefeet and finishedsquarefeet12, while lotsizesquarefeet doesn't have obvious pattern.
+
+## location variables
+```{r}
+library(GGally)
+sub_train = train[, c('logerror', 'longitude', 'latitude')]
+sub_train.dropna = sub_train[complete.cases(sub_train),]
+ggpairs(sub_train.dropna, method = "square", tl.cex = 1, type = 'lower')
+
+```
+We can see obviously that intemediate latitude gathers more non-zero logerror, and intermediate towards west longitude gather more non-zero logerror.
+
+## value variables
+```{r}
+tableplot(train, select = c('logerror', 'landtaxvaluedollarcnt', 
+                              'taxamount', 'structuretaxvaluedollarcnt'))
+```
+
+##  Tabplot - categorical
+## Date varialbes
+## Transaction date
+We can generate new features-txnmonth(transaction month) and txnday(transaction day) here.
+```{r}
+typeof(train$transactiondate)
+barplot(table(train$transactiondate))
+## txnmonth
+train$txnmonth <- sapply(strsplit(train$transactiondate, '-'), 
+                         function(x) x[2])
+library(lattice)
+bwplot(logerror ~ txnmonth, data = subset(train, abs(logerror) < 0.09))
+
+err.month_txnmonth <- by(train, train$txnmonth, function(x) {
+  return(mean(x$logerror))})
+plot(names(err.month_txnmonth), err.month_txnmonth, type = 'l',xlab='transaction_month',ylab='mean_logerror')
+
+## txnday
+train$txnday <- sapply(strsplit(train$transactiondate, '-'), 
+                         function(x) x[3])
+table(train$txnday)
+library(lattice)
+bwplot(logerror ~ txnday, data = subset(train, abs(logerror) < 0.09))
+
+err.month_txnday <- by(train, train$txnday, function(x) {
+  return(mean(x$logerror))})
+plot(names(err.month_txnday), err.month_txnday, type = 'l',xlab='transaction_day',ylab='mean_logerror')
+
+
+```
+We can see that the beginning and end of the year tend to have more positive logerror. Also, by ploting the relationship between mean_logerror and transaction_month, we notice that April to June are the best predicted month, while the beginning and end months are less accurate. For transaction day, there is no obvious pattern.
+
+##  location variables
+6037 Los Angeles, 6059 Orange County, 6111 Ventura County
+```{r}
+train$fips <- as.character(train$fips)
+train$regionidzip <- as.character(train$regionidzip)
+train$regionidcity <- as.character(train$regionidcity)
+table(train$regionidcounty)
+tableplot(train, select = c('logerror','fips','propertycountylandusecode','regionidzip'))
+```
+The graph indicates that prediction of houses in Los Angeles are less accurate.
+
+## other variables
+```{r}
+prop.table(table(train$hashottuborspa))
+prop.table(table(train$fireplaceflag))
+table(train$propertylandusetypeid)
+
+tableplot(train, select = c('logerror','propertyzoningdesc'))
+
+```
+
+## To generate more new features
+## bedroom/bathroom ratio
+```{r}
+train$bbratio<-(train$bedroomcnt/train$bathroomcnt)
+typeof(train$bbratio)
+summary(train$bbratio)
+err.bbratio <- by(train, train$bbratio, function(x) {
+  return(mean(x$logerror))})
+plot(names(err.bbratio), err.bbratio, type = 'l',xlab='bedroom/bathroom_ratio',ylab='mean_logerror')
+
+```
+
+
+## age of the house
+```{r}
+train$age<-(2017-train$yearbuilt+1)
+summary(train$age)
+err.age <- by(train, train$age, function(x) {
+  return(mean(x$logerror))})
+plot(names(err.age), err.age, type = 'l',xlab='house_age',ylab='mean_logerror')
+```
+The graph indicates that houses with more than 80 ages tend to have more non-zero logerror.
+
+## tax ratio per living area
+```{r}
+train$taxratio<-(train$taxamount/train$calculatedfinishedsquarefeet)
+summary(train$taxratio)
+tableplot(train, select=c('logerror','taxratio'))
+```
+Seems more underestimate of zestimate happens with higher tax ratio.
+
+## proportion of living area
+```{r}
+train$areaportion<-(train$calculatedfinishedsquarefeet/train$lotsizesquarefeet)
+summary(train$areaportion)
+tableplot(train, select=c('logerror','areaportion'))
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
