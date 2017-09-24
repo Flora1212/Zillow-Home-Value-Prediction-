@@ -1,0 +1,341 @@
+
+
+# Zillow Project, Tree Based Models
+
+## Goal
+This week, we develop Tree based models (decision tree, random forest, boosting) to predict the logerror between Zillow's estimate of home values and the actual sale price.
+
+```{r}
+rm(list=ls())
+```
+
+# Step one - Collecting data 
+# Step two - Exploring and preparing the data 
+
+##Import data into Rstudio
+```{r}
+load("C://Users//Flora//Desktop//Python//Bittiger//DS bootcamp//first month//zillow//train.prep.Rdata")
+
+
+train <- subset(train[,c('logerror','tax_total', 'tax_land', 'num_bathroom','num_bedroom','tax_building','area_total_calc','area_live_finished','tax_property','area_lot','build_year','county','zoning_landuse_county','aircon','heating','flag_tub','flag_spa','flag_pool_spa','flag_pool_tub','flag_fireplace','age','tax_ratio','tax_ratiobuilt','lot_living','bbratio','region_zip','region_city','region_county','zoning_landuse','room_bug','lot_bug', 'longitude','latitude')])
+
+```
+train.prep is the train dataset I prepared last week, including new features added.
+
+Features included:
+num_bathroom, num_bedroom, tax_building, area_total_calc, area_live_finished, tax_property, area_lot, build_year, county, zoning_landuse_county, aircon, heating ,flag_tub, flag_spa, flag_pool_spa, flag_pool_tub, flag_fireplace, region_zip, region_county, zoning_landuse, longitude, latitude,age of hourse: age, tax ratio: tax_ratio, tax of built structure/ total tax: tax_ratiobuilt, lot area/living area: lot_living, bedroom/bathroom ratio: bbratio, room_bug, lot_bug
+
+##Check missing values
+###Pattern display
+```{r}
+library(VIM)
+aggr_plot <- aggr(train,
+                  col=c('navyblue','red'),
+                  numbers=TRUE, sortVars=TRUE,
+                  labels=names(train),
+                  cex.axis=1.2, gap=2.5,
+                  ylab=c("Histogram of missing data","Pattern"))
+library(mice)
+head(md.pattern(train))
+num.NA <- sort(colSums(sapply(train, is.na)))   #find how many na in each column and order asc
+num.NA
+```
+We can see that lot_bug, lot_living and area_lot have the most missing values.
+
+###Dealing missing values
+###Drop missing values
+I tried mice(), but it is not suitable to impute feature with over 10k missing values, such as lot_living and area_lot. So we choose to drop the missing values.
+```{r}
+train = train[complete.cases(train), ]
+```
+
+##drop outliers
+```{r}
+train = train[which(!train$logerror %in% boxplot.stats(train$logerror)$out), ]
+
+```
+boxplot.stats()$out use the Tukey's method to identify the outliers ranged above and below the 1.5*IQR.
+
+##check missing values again
+```{r}
+library(Amelia)
+missmap(train)
+num.NA <- sort(colSums(sapply(train, is.na)))   #find how many na in each column and order asc
+num.NA
+```
+We can see that there are no missing values now.
+
+##Split the dataset into train and testing
+```{r}
+set.seed(134)
+train.ind <- sample(1:dim(train)[1], dim(train)[1]*0.7)    #randomly select 70% as training data
+train.data <- train[train.ind,]
+test.data <- train[-train.ind,] 
+num.NA1 <- sort(colSums(sapply(test.data, is.na)))   #find how many na in each column and order asc
+num.NA1
+```
+
+# Step Three - Training models on the data
+##Tree based Models
+##Desition Tree
+##One: Display some trees
+###Root only tree, cp=1
+```{r}
+library(rpart)
+formula <- paste("logerror ~ county + tax_land + tax_building + tax_property + area_total_calc + area_live_finished + area_lot + aircon + heating + age + tax_ratio + tax_ratiobuilt + lot_living + zoning_landuse + bbratio + room_bug +  lot_bug + longitude + latitude")
+
+tree0 <- rpart(formula, method = "anova", data = train.data,
+               control = rpart.control(cp = 1))
+tree0
+
+```
+
+###More complex tree
+```{r}
+tree1 <- rpart(formula, method = "anova", data = train.data,
+               control = rpart.control(cp = 0.0002))
+printcp(tree1)
+plotcp(tree1)
+```
+We can see the part in the graph that with cp becoming smaller, tree becoming more complex, though bias decreases, variance increases more, resulting in an increase of total cross validation error (overfitting).
+
+##Two: Pick the tree size that minimizes xerror
+```{r}
+bestcp1 <- tree1$cptable[which.min(tree1$cptable[,"xerror"]),"CP"]
+bestcp1
+
+# Rule of thumb to a simpler model: xerror - 1std, xerror + 1std contains xerror_min
+cp.tab <- as.data.frame(tree1$cptable)
+cp.tab
+with(cp.tab, min(which(xerror - xstd < min(xerror))))
+bestcp2 <- cp.tab$CP[with(cp.tab, min(which(xerror - xstd < min(xerror))))]
+bestcp2
+```
+Here, we select cp=0.0009643048 to minimize xerror.
+
+##Three: Prune the tree using the best cp
+```{r}
+tree.pruned <- prune(tree1, cp = bestcp1) #choose the bestcp and to see what the tree look like now
+tree.pruned
+```
+
+##Four: use the tree model we train to predict
+For character variables, if new levels in test data, there will be errors. So We impute them as NAs.
+```{r}
+test.data$region_zip[which(!test.data$region_zip %in% train.data$region_zip)] <- NA
+test.data$zoning_landuse[which(!test.data$zoning_landuse %in% train.data$zoning_landuse)] <- NA
+test.data$county[which(!test.data$county %in% train.data$county)] <- NA
+test.data$aircon[which(!test.data$aircon %in% train.data$aircon)] <- NA
+test.data$heating[which(!test.data$heating %in% train.data$heating)] <- NA
+```
+
+
+###tree visualization (when tree is simple)
+```{r}
+library(rpart.plot)
+prp(tree.pruned, faclen = 0, cex = 0.8 )   
+```
+
+###Prediction - MSE
+```{r}
+pred.tree <- predict(tree.pruned, test.data)
+sum((pred.tree - test.data$logerror)^2) / dim(test.data)[1]
+```
+
+##Random Forest
+First, we need to convert numeric categorical features into factors, instead of characters, because Random forest library will automatically convert characters into numerics.
+```{r}
+train$aircon <- as.factor(train$aircon)
+train$heating <- as.factor(train$heating)
+train$county <- as.factor(train$county)
+train$zoning_landuse <- as.factor(train$zoning_landuse)
+```
+
+
+###Train random forest model
+```{r}
+library(randomForest)
+set.seed(123)
+
+rf <- randomForest(as.formula(formula), data = train.data, 
+                   importance = TRUE, ntree = 50) 
+head(getTree(rf, k = 1, labelVar = TRUE))
+
+#importance of features 
+varImpPlot(rf) 
+importance(rf, type = 1)  #type = 1 means %IncMSE
+
+#rf performance
+plot(rf)  
+
+```
+We can see that tax related features, age of the house and location(longitude and latitude) are the most important features. Also notice that the out-of-bag error decreases rapidly first with increasing tree size, and becomes relatively stable after nrounds=30.
+
+###Prediction - MSE
+```{r}
+pred.rf <- predict(rf, test.data) 
+sum((pred.rf- test.data$logerror)^2, na.rm = T) / length(which(!is.na(pred.rf))) 
+```
+
+##Xgboost
+First, we need to set the label (response variable).
+```{r}
+library(xgboost)
+train.label <- train.data$logerror 
+test.label <- test.data$logerror   
+
+formula.boost <- paste("logerror ~ county + tax_land + tax_building + tax_property + area_total_calc + area_live_finished + area_lot + heating + age + tax_ratio + tax_ratiobuilt + lot_living + zoning_landuse + bbratio + room_bug +  lot_bug + longitude + latitude")
+
+feat.cols <- c('county','tax_land','tax_building' ,'tax_property','area_total_calc', 'area_live_finished' ,'area_lot', 'heating' ,'age', 'tax_ratio' ,'tax_ratiobuilt', 'lot_living' ,'zoning_landuse','bbratio' , 'room_bug', 'lot_bug','longitude','latitude')
+
+```
+
+Then,as xgboost only takes matrix features, so we need to convert train.data from data frame to matrix.
+```{r}
+feature.matrix <- model.matrix(~.-1, data = train.data[, feat.cols])
+test.matrix <- model.matrix(~.-1, data = test.data[, feat.cols])
+dim(feature.matrix)
+dim(train.data)
+
+dim(test.matrix)
+dim(test.data)
+```
+
+###Self-defined Xgboost
+First, we try a self-defined boosting tree.
+```{r}
+gbt0 <- xgboost(data = feature.matrix, 
+               label = train.label,
+               max_depth = 8,
+               nround = 20,    
+               objective = "reg:linear",
+               verbose = 2
+)
+
+importance <- xgb.importance(feature_names = colnames(feature.matrix),
+                             model = gbt0)
+head(importance)
+
+#plot gain
+xgb.plot.importance(importance, cex =1.2, top_n = 15)
+```
+In the boosting model, we can see that area, tax, location(longitude and latitude) and age of house freatures make greatest contributions.
+
+####maximum tree size
+```{r}
+par <- list( max_depth = 8,
+             objective = "reg:linear",
+             nthread = 3,
+             verbose = 2)
+gbt0.cv <- xgb.cv(params = par,
+                 data = feature.matrix, label = train.label,
+                 nfold = 5, nrounds = 100, verbose = F)
+
+plot(gbt0.cv$evaluation_log$train_rmse_mean, type = 'l')
+lines(gbt0.cv$evaluation_log$test_rmse_mean, col = 'red')
+
+
+nround = which(gbt0.cv$evaluation_log$test_rmse_mean == min(gbt0.cv$evaluation_log$test_rmse_mean))
+nround
+```
+We can see that RMSE for both train and testing dataset decreases greatly first, and become relatively stable afterwards. The optimal nround is 17 to get minimum RMSE on test data.
+
+```{r}
+gbt1 <- xgboost(data = feature.matrix, 
+               label = train.label,
+               nround = nround,
+               params = par)
+```
+Now, gbt1 shows the boosting tree with optimal tree size we just find.
+
+###grid searching for parameters
+To get the optimal combination of multiple parameters, we use grid search method.
+```{r}
+all_param = NULL
+all_test_rmse = NULL
+all_train_rmse = NULL
+
+
+for (iter in 1:100) {
+  
+  param <- list(objective = "reg:linear",
+                max_depth = sample(5:12, 1),
+                subsample = runif(1, .6, .9),
+                colsample_bytree = runif(1, .5, .8),
+                eta = runif(1, .01, .3)
+                #  gamma = runif(1, 0.0, 0.2),
+                #  min_child_weight = sample(1:40, 1),
+                #  max_delta_step = sample(1:10, 1)
+  )
+  cv.nround = 100
+  cv.nfold = 5
+  seed.number = sample.int(10000, 1)[[1]]
+  set.seed(seed.number)
+  mdcv <- xgb.cv(data=feature.matrix,
+                 label = train.label,
+                 params = param, 
+                 nfold=cv.nfold,
+                 nrounds=cv.nround,
+                 #metrics = "mae",
+                 early_stopping_rounds = 10, 
+                 maximize=FALSE,
+                 verbose = F)
+  min_train_rmse = min(mdcv$evaluation_log$train_rmse_mean)
+  min_test_rmse = min(mdcv$evaluation_log$test_rmse_mean)
+  
+  all_param <- rbind(all_param, unlist(param)[-1])
+  all_train_rmse <- c(all_train_rmse, min_train_rmse)
+  all_test_rmse <- c(all_test_rmse, min_test_rmse)
+}
+
+all_param <- as.data.frame(all_param)
+best_param <- all_param[which(all_test_rmse == min(all_test_rmse)), ]
+best_param
+gbt <- xgboost(data =  feature.matrix, 
+               label = train.label, 
+               params = best_param,
+               nrounds=100,
+               early_stopping_rounds = 10,
+               maximize = FALSE)
+
+# prediction
+prediction <- predict(gbt, test.matrix)
+mean((prediction - test.data$logerror)^2)
+```
+
+# Step Four - Evaluating model performance
+##prediction summary - MSE
+```{r}
+#Decistin Tree: 
+MSE.DT <- mean((pred.tree - test.data$logerror)^2)
+sprintf("Decision Tree MSE: %f", MSE.DT)
+#Random Forest:
+MSE.RF <- sum((pred.rf- test.data$logerror)^2, na.rm = T) / length(which(!is.na(pred.rf))) 
+sprintf("Random Forest MSE: %f", MSE.RF)
+#Boosting:
+MSE.Boosting <- mean((prediction - test.data$logerror)^2)
+sprintf("Boosting MSE: %f", MSE.Boosting)
+```
+As to the results, we choose the random forest model since it has the minimum MSE among these three tree-based models.
+
+Mistakes to notice: 1. deal with missing values before split into train and test dataset, to make sure they have same dimention. 
+2.For character variables, we should impute new levels in test dataset as NAs. 
+3. rpart() can deal with missing values automatically, but randomForest() needs us to deal with NAs beforen running the model. 
+4. To use randomForest, convert character features into factors. 
+5. In xgboost, we should set labels (response variable), and also convert features from data frame to matrix. 
+6. Extremely careful of NAs! After 2, the complete test dataset will probably have NAs again, remember to deal with that. If not, in xgboost, test.matrix and test.data will have different dimensions.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
